@@ -1,46 +1,46 @@
 # trade_executor.py
 
-from telegram import send_telegram_message
-
+from deriv_api import DerivWS
+from telegram_bot import send_telegram_message  # ✅ fixed import
 
 class TradeExecutor:
 
     @staticmethod
-    def execute(ws, symbol, direction, lot, sl, tp1, tp2):
+    def execute(ws: DerivWS, symbol: str, signal: str, lot: float, sl: float, tp1: float, tp2: float):
         """
-        Executes trade using Deriv WebSocket
+        Execute a trade on Deriv and send a Telegram notification.
+        ws     : Deriv WebSocket object
+        symbol : trading symbol, e.g., "frxXAUUSD"
+        signal : "BUY" or "SELL"
+        lot    : position size
+        sl     : stop loss
+        tp1    : first take profit
+        tp2    : second take profit
         """
-
         try:
-            contract_type = "CALL" if direction == "BUY" else "PUT"
+            # Prepare contract parameters
+            contract_type = "CALL" if signal == "BUY" else "PUT"
 
-            proposal = {
-                "proposal": 1,
-                "amount": lot,
-                "basis": "stake",
-                "contract_type": contract_type,
-                "currency": "USD",
-                "duration": 1,
-                "duration_unit": "m",
-                "symbol": symbol
-            }
-
-            ws.send(proposal)
-
-            send_telegram_message(
-                f"""
-🚀 Trade Executed
-Symbol: {symbol}
-Direction: {direction}
-Lot: {lot}
-
-SL: {sl}
-TP1: {tp1}
-TP2: {tp2}
-"""
+            # Send trade via WebSocket
+            ws.buy_contract(
+                symbol=symbol,
+                contract_type=contract_type,
+                amount=lot,
+                stop_loss=sl,
+                take_profit=[tp1, tp2]
             )
 
-            print("Trade executed successfully")
+            # Telegram alert
+            message = (
+                f"💹 Trade Executed:\n"
+                f"Signal: {signal}\n"
+                f"Symbol: {symbol}\n"
+                f"Lot: {lot}\n"
+                f"SL: {sl}\n"
+                f"TP1: {tp1}, TP2: {tp2}"
+            )
+            send_telegram_message(message)
 
         except Exception as e:
-            print("Execution error:", e)
+            print("Trade execution failed:", e)
+            send_telegram_message(f"⚠️ Trade execution failed: {e}")
