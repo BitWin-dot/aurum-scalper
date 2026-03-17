@@ -1,14 +1,13 @@
 # Aurum Scalper Configuration
 
-# Deriv API tokens (we'll fill later)
+# Deriv API tokens
 DERIV_TOKENS = [
-    "YOUR_DERIV_API_TOKEN_1",
-    # Add more if needed
+    "gIUrsIg5H56ZNfC",
 ]
 
 # Telegram
-TELEGRAM_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
-CHAT_ID = "YOUR_CHAT_ID"
+TELEGRAM_TOKEN = "8693765411:AAHql2ysRMOhvtgPuNf9JdyE6yfqfEowmjs"
+CHAT_ID = "-5180694120"
 
 # Risk settings
 RISK_PER_TRADE = 0.01  # 1% risk
