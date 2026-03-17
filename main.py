@@ -1,39 +1,59 @@
-# main.py
 import json
-from deriv_api import DerivWS
-from strategies.liquidity_vwap import calculate_score
+import websocket
+from config import DERIV_TOKENS
 
-# Placeholder indicators
-def compute_vwap(candle):
-    return (candle["high"] + candle["low"] + candle["close"]) / 3
+class DerivWS:
+    def __init__(self, token_index=0):
+        self.token = DERIV_TOKENS[token_index]
+        self.ws = None
+        self.symbol = "frxXAUUSD"
+        self.candle_handler = None
+        self.first_candle_received = False
 
-def compute_rsi(candle):
-    return 55  # placeholder
+    def on_message(self, ws, message):
+        data = json.loads(message)
+        if "candles" in data:
+            latest = data["candles"][-1]
 
-# Handle each new candle
-def handle_new_candle(candle):
-    candle_data = {
-        "open": candle["open"],
-        "high": candle["high"],
-        "low": candle["low"],
-        "close": candle["close"],
-        "volume": candle.get("volume", 0)
-    }
+            # Ignore initial backlog candle
+            if not self.first_candle_received:
+                self.first_candle_received = True
+                return
 
-    vwap = compute_vwap(candle_data)
-    rsi = compute_rsi(candle_data)
+            if self.candle_handler:
+                self.candle_handler(latest)
 
-    score = calculate_score(candle_data, vwap, rsi)
+        if "error" in data:
+            print("Deriv error:", data["error"])
 
-    if score >= 3:
-        print(f"🚀 Trade Signal Detected! Score: {score} | Close:{candle['close']} High:{candle['high']} Low:{candle['low']}")
+    def on_open(self, ws):
+        print("✅ Connected to Deriv WebSocket")
+        ws.send(json.dumps({"authorize": self.token}))
 
-def start_bot():
-    ws_client = DerivWS()
-    ws_client.candle_handler = handle_new_candle  # attach handler
+        subscribe_msg = {
+            "ticks_history": self.symbol,
+            "end": "latest",
+            "count": 2,  # minimal backlog
+            "granularity": 60,
+            "style": "candles",
+            "subscribe": 1
+        }
+        ws.send(json.dumps(subscribe_msg))
+        print(f"Subscribed to {self.symbol} 1-minute candles")
 
-    print("🚀 Aurum Scalper Bot Starting...")
-    ws_client.start()
+    def on_error(self, ws, error):
+        print("WebSocket error:", error)
 
-if __name__ == "__main__":
-    start_bot()
+    def on_close(self, ws, close_status_code, close_msg):
+        print("WebSocket closed")
+
+    def start(self):
+        self.ws = websocket.WebSocketApp(
+            "wss://ws.binaryws.com/websockets/v3?app_id=1089",
+            on_open=self.on_open,
+            on_message=self.on_message,
+            on_error=self.on_error,
+            on_close=self.on_close
+        )
+        # run_forever handles reconnects internally
+        self.ws.run_forever()
