@@ -18,18 +18,22 @@ def send_telegram_message(msg):
     except Exception as e:
         print("Telegram error:", e)
 
+# Test Telegram
 send_telegram_message("✅ Aurum Scalper Minimal Bot Running")
 
 # Candle handler
 def handle_candle(candle):
     try:
         print(f"Candle received: {candle}")  # Debug log
+        # Example: send candle open/close info to Telegram (optional)
+        # msg = f"Candle Update\nOpen: {candle['open']}\nClose: {candle['close']}"
+        # send_telegram_message(msg)
     except Exception as e:
         print("Candle handler error:", e)
 
 # -------------------------------
-# Correct DerivWS initialization
-ws = DerivWS(DERIV_API_TOKEN)  # pass token directly
+# Initialize Deriv WebSocket with real token
+ws = DerivWS(DERIV_API_TOKEN)
 ws.candle_handler = handle_candle
 ws.start()
 print("🚀 Aurum Scalper Minimal Bot Started")
@@ -37,8 +41,8 @@ print("🚀 Aurum Scalper Minimal Bot Started")
 # Main loop
 try:
     while True:
-        print("Waiting for live candles...")
         time.sleep(5)
+        print("Waiting for live candles...")
 except KeyboardInterrupt:
     print("Bot stopped manually")
 except Exception as e:
