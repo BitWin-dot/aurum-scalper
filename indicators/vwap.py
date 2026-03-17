@@ -1,0 +1,1 @@
+# VWAP indicator calculation
