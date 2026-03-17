@@ -1,19 +1,27 @@
-# main.py - Aurum Scalper Real Trading (Deriv)
-import json
+# main.py - Aurum Scalper Real Trading with Partial TP & Dynamic Lot
 import time
 import requests
 from deriv_api import DerivWS
+from strategies.liquidity_vwap import calculate_score
 
 # --- Telegram Config ---
 TELEGRAM_BOT_TOKEN = "8693765411:AAHql2ysRMOhvtgPuNf9JdyE6yfqfEowmjs"
 TELEGRAM_CHAT_ID = "-5180694120"
 
+def send_telegram(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+    try:
+        requests.post(url, data=payload)
+    except Exception as e:
+        print("Telegram send error:", e)
+
 # --- Trade Settings ---
-RISK_PERCENT = 1.0  # risk 1% of account balance per trade
-TP_MULTIPLIER_1 = 1.0  # 1R
-TP_MULTIPLIER_2 = 2.0  # 2R
+RISK_PERCENT = 1.0
+TP_MULTIPLIER_1 = 1.0
+TP_MULTIPLIER_2 = 2.0
 MAX_CONSECUTIVE_LOSSES = 3
-DAILY_DRAWDOWN_LIMIT = 5.0  # percent
+DAILY_DRAWDOWN_LIMIT = 5.0
 MAX_TRADES_PER_SESSION = 10
 
 # --- Globals ---
@@ -28,19 +36,7 @@ RSI_PERIOD = 14
 candle_window = []
 close_prices = []
 
-# --- Strategy import ---
-from strategies.liquidity_vwap import calculate_score
-
-# --- Telegram helper ---
-def send_telegram(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
-    try:
-        requests.post(url, data=payload)
-    except Exception as e:
-        print("Telegram send error:", e)
-
-# --- Indicator calculations ---
+# --- Indicators ---
 def compute_vwap(candles):
     total_vp = 0
     total_volume = 0
@@ -66,8 +62,16 @@ def compute_rsi(prices, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-# --- Trade execution via Deriv API ---
-def execute_trade(direction, entry_price, sl, tp1, tp2, lot_size):
+# --- Trade execution ---
+def calculate_lot_size(account_balance, entry, stop_loss):
+    risk_amount = account_balance * (RISK_PERCENT / 100)
+    distance = abs(entry - stop_loss)
+    if distance == 0:
+        return 0.01
+    lot_size = round(risk_amount / distance, 2)
+    return max(0.01, lot_size)
+
+def execute_trade(direction, entry_price, sl, tp1, tp2, lot_size, account_balance):
     trade = {
         "direction": direction,
         "entry": entry_price,
@@ -78,16 +82,39 @@ def execute_trade(direction, entry_price, sl, tp1, tp2, lot_size):
         "status": "open"
     }
     open_trades.append(trade)
-
-    msg = f"TRADE OPENED\nDirection: {direction}\nEntry: {entry_price}\nSL: {sl}\nTP1: {tp1}\nTP2: {tp2}\nLot: {lot_size}"
+    msg = (
+        f"TRADE OPENED\nDirection: {direction}\nEntry: {entry_price}\n"
+        f"SL: {sl}\nTP1: {tp1}\nTP2: {tp2}\nLot: {lot_size}\nRisk: {RISK_PERCENT}%"
+    )
     print(msg)
     send_telegram(f"Aurum Scalper Live: {msg}")
 
-# --- Handle new candle ---
-def handle_new_candle(candle):
-    global candle_window, close_prices, session_trade_count, consecutive_losses, daily_drawdown
+# --- Manage trades ---
+def check_open_trades(current_price):
+    global open_trades, consecutive_losses, daily_drawdown
+    for trade in open_trades[:]:
+        # TP1
+        if trade["status"] == "open":
+            if (trade["direction"] == "BUY" and current_price >= trade["tp1"]) or \
+               (trade["direction"] == "SELL" and current_price <= trade["tp1"]):
+                trade["status"] = "tp1_done"
+                msg = f"Partial TP hit (50%) at {trade['tp1']}"
+                print(msg)
+                send_telegram(msg)
+        # TP2
+        if trade["status"] == "tp1_done":
+            if (trade["direction"] == "BUY" and current_price >= trade["tp2"]) or \
+               (trade["direction"] == "SELL" and current_price <= trade["tp2"]):
+                trade["status"] = "closed"
+                msg = f"Final TP hit at {trade['tp2']} - Trade Closed"
+                print(msg)
+                send_telegram(msg)
+                open_trades.remove(trade)
 
-    # Update candle window & close prices
+# --- Handle new candle ---
+def handle_new_candle(candle, account_balance=10000):
+    global candle_window, close_prices, session_trade_count
+
     candle_data = {
         "open": candle["open"],
         "high": candle["high"],
@@ -106,30 +133,27 @@ def handle_new_candle(candle):
     if len(close_prices) > RSI_PERIOD + 1:
         close_prices.pop(0)
 
-    # Compute indicators
     vwap = compute_vwap(candle_window)
     rsi = compute_rsi(close_prices, RSI_PERIOD)
-
-    # Calculate score
     score = calculate_score(candle_data, vwap, rsi)
 
-    # Risk / trade filters
+    check_open_trades(candle_data["close"])
+
     if score >= 3 and session_trade_count < MAX_TRADES_PER_SESSION:
-        # Example placeholders for SL / TP / Lot size
         direction = "BUY" if candle_data["close"] > vwap else "SELL"
         stop_loss = candle_data["low"] - 10 if direction == "BUY" else candle_data["high"] + 10
         tp1 = candle_data["close"] + TP_MULTIPLIER_1 * abs(candle_data["close"] - stop_loss) if direction == "BUY" else candle_data["close"] - TP_MULTIPLIER_1 * abs(candle_data["close"] - stop_loss)
         tp2 = candle_data["close"] + TP_MULTIPLIER_2 * abs(candle_data["close"] - stop_loss) if direction == "BUY" else candle_data["close"] - TP_MULTIPLIER_2 * abs(candle_data["close"] - stop_loss)
-        lot_size = 0.01  # placeholder, implement dynamic lot sizing later
+        lot_size = calculate_lot_size(account_balance, candle_data["close"], stop_loss)
 
-        execute_trade(direction, candle_data["close"], stop_loss, tp1, tp2, lot_size)
+        execute_trade(direction, candle_data["close"], stop_loss, tp1, tp2, lot_size, account_balance)
         session_trade_count += 1
 
 # --- Start Bot ---
 def start_bot():
     ws_client = DerivWS()
     ws_client.candle_handler = handle_new_candle
-    print("🚀 Aurum Scalper Real Trading Bot Starting...")
+    print("🚀 Aurum Scalper Real Trading Bot with Partial TP Starting...")
     ws_client.start()
 
 if __name__ == "__main__":
