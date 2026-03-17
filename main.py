@@ -1,124 +1,80 @@
 # main.py
 
 import time
-import traceback
-
 from deriv_api import DerivWS
-from filters.session import SessionFilter
-from filters.volatility import VolatilityFilter
-from filters.spread import SpreadFilter
-from risk_management import RiskManager
 from trade_executor import TradeExecutor
 from trade_manager import TradeManager
 from telegram_bot import send_telegram_message
-from strategies.confluence import confluence  # ✅ corrected: lowercase
+from strategies.confluence import confluence  # ✅ matches your structure
 
-
-# ================= CONFIG =================
+# -------------------------------
+# CONFIG
+# -------------------------------
+DERIV_API_TOKEN = "gIUrsIg5H56ZNfC"
 SYMBOL = "frxXAUUSD"
-TIMEFRAME = 60  # 1-minute candles
-BALANCE = 1000  # adjust if needed
-# ==========================================
+LOT_SIZE = 1.0
+SL = 10  # example stop loss
+TP1 = 20  # example take profit 1
+TP2 = 40  # example take profit 2
+CANDLE_INTERVAL = "1m"
 
+# -------------------------------
+# INITIALIZE WEBSOCKET
+# -------------------------------
+try:
+    ws = DerivWS(DERIV_API_TOKEN)
+    print("✅ Connected to Deriv WebSocket")
+except Exception as e:
+    print("❌ WebSocket connection failed:", e)
+    send_telegram_message(f"❌ WebSocket connection failed: {e}")
+    exit(1)
 
-def run_bot():
+# -------------------------------
+# SUBSCRIBE TO LIVE CANDLES
+# -------------------------------
+try:
+    ws.subscribe_candles(symbol=SYMBOL, interval=CANDLE_INTERVAL)
+    print(f"Subscribed to {SYMBOL} {CANDLE_INTERVAL} candles")
+except Exception as e:
+    print("❌ Candle subscription failed:", e)
+    send_telegram_message(f"❌ Candle subscription failed: {e}")
+    exit(1)
 
-    print("🚀 Aurum Scalper Final Bot Started")
-    send_telegram_message("🚀 Aurum Scalper Bot is LIVE")
+# -------------------------------
+# INITIALIZE TRADE MANAGER
+# -------------------------------
+trade_manager = TradeManager(ws, TradeExecutor)
 
-    ws = DerivWS()  # fixed DerivWS initialization (env token inside deriv_api.py)
+# -------------------------------
+# BOT LOOP
+# -------------------------------
+print("🚀 Aurum Scalper Bot Started")
+send_telegram_message("🚀 Aurum Scalper Bot Started")
 
-    ws.connect()
-    ws.subscribe_candles(SYMBOL, TIMEFRAME)
-
-    candles = []
-
-    while True:
-        try:
-            data = ws.get_latest_candle()
-
-            if not data:
-                print("Waiting for live candles...")
-                time.sleep(1)
-                continue
-
-            candles.append(data)
-
-            # Keep only last 100 candles
-            if len(candles) > 100:
-                candles.pop(0)
-
-            # Need enough data
-            if len(candles) < 50:
-                continue
-
-            # ================= FILTERS =================
-            if not SessionFilter.is_active():
-                continue
-
-            if not VolatilityFilter.is_volatile(candles):
-                continue
-
-            if not SpreadFilter.is_spread_ok():
-                continue
-            # ===========================================
-
-            # ================= STRATEGY =================
-            signal = confluence.generate_signal(candles)
-
-            if signal not in ["BUY", "SELL"]:
-                continue
-            # ===========================================
-
-            # ================= TRADE CONTROL ============
-            if not TradeManager.can_trade():
-                continue
-            # ===========================================
-
-            entry_price = candles[-1]['close']
-
-            sl, tp1, tp2 = RiskManager.calculate_sl_tp(
-                candles, entry_price, signal
-            )
-
-            sl_distance = abs(entry_price - sl)
-
-            lot = RiskManager.calculate_position_size(
-                BALANCE, sl_distance
-            )
-
-            if lot <= 0:
-                continue
-
-            # ================= EXECUTE ==================
-            TradeExecutor.execute(
-                ws,
-                SYMBOL,
-                signal,
-                lot,
-                sl,
-                tp1,
-                tp2
-            )
-
-            TradeManager.open_trade()
-            # ===========================================
-
-            time.sleep(5)  # prevent overtrading
-
-        except Exception as e:
-            print("ERROR:", e)
-            traceback.print_exc()
-
-            send_telegram_message(f"⚠️ Bot Error: {str(e)}")
-
-            time.sleep(5)
-
-
-# ================= RUN FOREVER =================
 while True:
     try:
-        run_bot()
+        # Get the latest candles
+        candles = ws.get_latest_candles(SYMBOL, interval=CANDLE_INTERVAL, count=10)
+        if not candles:
+            time.sleep(1)
+            continue
+
+        # Generate signal from confluence strategy
+        signal = confluence.generate_signal(candles)
+        if signal:
+            print(f"Signal detected: {signal}")
+            trade_manager.manage_trade(
+                symbol=SYMBOL,
+                signal=signal,
+                lot=LOT_SIZE,
+                sl=SL,
+                tp1=TP1,
+                tp2=TP2
+            )
+
+        time.sleep(1)  # 1 second loop for minimal latency
+
     except Exception as e:
-        print("CRASH RESTART:", e)
+        print("⚠️ Bot loop error:", e)
+        send_telegram_message(f"⚠️ Bot loop error: {e}")
         time.sleep(5)
