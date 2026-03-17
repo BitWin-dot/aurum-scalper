@@ -1,0 +1,1 @@
+# EMA indicator calculation
