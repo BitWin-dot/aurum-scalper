@@ -1,49 +1,124 @@
+# main.py
+
 import time
+import traceback
+
 from deriv_api import DerivWS
-import requests
+from strategies.confluence import Confluence
+from filters.session import SessionFilter
+from filters.volatility import VolatilityFilter
+from filters.spread import SpreadFilter
+from risk_management import RiskManager
+from trade_executor import TradeExecutor
+from trade_manager import TradeManager
+from telegram_bot import send_telegram_message
 
-# -------------------------------
-# ✅ TOKENS
-DERIV_API_TOKEN = "gIUrsIg5H56ZNfC"
-TELEGRAM_BOT_TOKEN = "8693765411:AAHql2ysRMOhvtgPuNf9JdyE6yfqfEowmjs"
-TELEGRAM_CHAT_ID = "-5180694120"
-# -------------------------------
 
-# Telegram function
-def send_telegram_message(msg):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg}
-    try:
-        requests.post(url, json=payload)
-    except Exception as e:
-        print("Telegram error:", e)
+# ================= CONFIG =================
+SYMBOL = "frxXAUUSD"
+TIMEFRAME = 60  # 1 minute candles
+BALANCE = 1000  # change if needed
+# ==========================================
 
-# Test Telegram
-send_telegram_message("✅ Aurum Scalper Minimal Bot Running")
 
-# Candle handler
-def handle_candle(candle):
-    try:
-        print(f"Candle received: {candle}")  # Debug log
-        # Example: send candle open/close info to Telegram (optional)
-        # msg = f"Candle Update\nOpen: {candle['open']}\nClose: {candle['close']}"
-        # send_telegram_message(msg)
-    except Exception as e:
-        print("Candle handler error:", e)
+def run_bot():
 
-# -------------------------------
-# Initialize Deriv WebSocket with real token
-ws = DerivWS(DERIV_API_TOKEN)
-ws.candle_handler = handle_candle
-ws.start()
-print("🚀 Aurum Scalper Minimal Bot Started")
+    print("🚀 Aurum Scalper Final Bot Started")
+    send_telegram_message("🚀 Aurum Scalper Bot is LIVE")
 
-# Main loop
-try:
+    ws = DerivWS()  # your fixed version (no token issues)
+
+    ws.connect()
+    ws.subscribe_candles(SYMBOL, TIMEFRAME)
+
+    candles = []
+
     while True:
+        try:
+            data = ws.get_latest_candle()
+
+            if not data:
+                print("Waiting for live candles...")
+                time.sleep(1)
+                continue
+
+            candles.append(data)
+
+            # Keep only last 100 candles
+            if len(candles) > 100:
+                candles.pop(0)
+
+            # Need enough data
+            if len(candles) < 50:
+                continue
+
+            # ================= FILTERS =================
+            if not SessionFilter.is_active():
+                continue
+
+            if not VolatilityFilter.is_volatile(candles):
+                continue
+
+            if not SpreadFilter.is_spread_ok():
+                continue
+            # ===========================================
+
+            # ================= STRATEGY =================
+            signal = Confluence.generate_signal(candles)
+
+            if signal not in ["BUY", "SELL"]:
+                continue
+            # ===========================================
+
+            # ================= TRADE CONTROL ============
+            if not TradeManager.can_trade():
+                continue
+            # ===========================================
+
+            entry_price = candles[-1]['close']
+
+            sl, tp1, tp2 = RiskManager.calculate_sl_tp(
+                candles, entry_price, signal
+            )
+
+            sl_distance = abs(entry_price - sl)
+
+            lot = RiskManager.calculate_position_size(
+                BALANCE, sl_distance
+            )
+
+            if lot <= 0:
+                continue
+
+            # ================= EXECUTE ==================
+            TradeExecutor.execute(
+                ws,
+                SYMBOL,
+                signal,
+                lot,
+                sl,
+                tp1,
+                tp2
+            )
+
+            TradeManager.open_trade()
+            # ===========================================
+
+            time.sleep(5)  # prevent overtrading
+
+        except Exception as e:
+            print("ERROR:", e)
+            traceback.print_exc()
+
+            send_telegram_message(f"⚠️ Bot Error: {str(e)}")
+
+            time.sleep(5)
+
+
+# ================= RUN FOREVER =================
+while True:
+    try:
+        run_bot()
+    except Exception as e:
+        print("CRASH RESTART:", e)
         time.sleep(5)
-        print("Waiting for live candles...")
-except KeyboardInterrupt:
-    print("Bot stopped manually")
-except Exception as e:
-    print("Bot crashed:", e)
