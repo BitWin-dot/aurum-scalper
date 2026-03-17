@@ -4,14 +4,14 @@ from config import DERIV_TOKENS
 
 class DerivWS:
     """
-    Deriv WebSocket client for Gold/USD CFD
+    Deriv WebSocket client for Gold/USD CFD (frxXAUUSD)
     Streams 1-minute candles
     """
 
     def __init__(self, token_index=0):
         self.token = DERIV_TOKENS[token_index]
         self.ws = None
-        self.symbol = "Gold/USD"  # Correct Deriv symbol for Gold/USD CFD
+        self.symbol = "frxXAUUSD"  # Deriv symbol for Gold/USD CFD
 
     def on_message(self, ws, message):
         data = json.loads(message)
@@ -20,7 +20,7 @@ class DerivWS:
         if "candles" in data:
             print("Candle:", json.dumps(data["candles"], indent=2))
 
-        # Error handling
+        # Errors
         if "error" in data:
             print("Deriv error:", data["error"])
 
@@ -28,10 +28,9 @@ class DerivWS:
         print("✅ Connected to Deriv WebSocket")
 
         # 1) Authorize
-        auth_msg = {"authorize": self.token}
-        ws.send(json.dumps(auth_msg))
+        ws.send(json.dumps({"authorize": self.token}))
 
-        # 2) Subscribe to Gold/USD 1-minute candles
+        # 2) Subscribe to 1-minute candles
         subscribe_msg = {
             "ticks_history": self.symbol,
             "end": "latest",
