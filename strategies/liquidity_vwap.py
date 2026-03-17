@@ -1,39 +1,86 @@
-# liquidity_vwap.py
+# strategies/liquidity_vwap.py
+from indicators.vwap import VWAP
+from indicators.rsi import RSI
+from indicators.volume import VolumeSpike
 
-def calculate_score(candle, vwap, rsi):
+class LiquidityVWAPStrategy:
     """
-    Calculates the Liquidity Sweep + VWAP score based on your 5-point scoring system.
-    Returns an integer score (0–5)
+    Strategy 1: Liquidity Sweep + VWAP Reversal
+    Confluence scoring: enter trade if score >= 3
     """
 
-    score = 0
+    def __init__(self, candles):
+        """
+        candles: list of recent candles in format [{'open':..., 'high':..., 'low':..., 'close':..., 'volume':...}, ...]
+        """
+        self.candles = candles
 
-    # 1️⃣ Liquidity sweep: check if candle wick exceeds previous high/low
-    if "prev_high" in candle and candle["high"] > candle["prev_high"]:
-        score += 1
-    elif "prev_low" in candle and candle["low"] < candle["prev_low"]:
-        score += 1
+    def calculate_score(self):
+        """
+        Returns a dict: {'score': int, 'signal': 'BUY'/'SELL'/None, 'sl': float, 'tp1': float, 'tp2': float}
+        """
+        score = 0
+        signal = None
+        sl = None
+        tp1 = None
+        tp2 = None
 
-    # 2️⃣ Strong displacement candle
-    body = abs(candle["close"] - candle["open"])
-    range_ = candle["high"] - candle["low"]
-    if range_ > 1.5 * body:
-        score += 1
+        if len(self.candles) < 5:
+            return {'score': score, 'signal': None, 'sl': None, 'tp1': None, 'tp2': None}
 
-    # 3️⃣ Price reclaims VWAP
-    if candle["close"] > vwap:
-        score += 1  # bullish reclaim
-    elif candle["close"] < vwap:
-        score += 1  # bearish reclaim
+        last_candle = self.candles[-1]
+        prev_candle = self.candles[-2]
 
-    # 4️⃣ RSI confirmation
-    if rsi > 50 and candle["close"] > vwap:
-        score += 1
-    elif rsi < 50 and candle["close"] < vwap:
-        score += 1
+        # === 1. Liquidity Sweep ===
+        equal_highs = max(c['high'] for c in self.candles[-5:])
+        equal_lows = min(c['low'] for c in self.candles[-5:])
+        sweep_buy = last_candle['low'] < equal_lows
+        sweep_sell = last_candle['high'] > equal_highs
+        if sweep_buy or sweep_sell:
+            score += 1
 
-    # 5️⃣ Volume spike
-    if "volume" in candle and candle["volume"] > 1000:  # placeholder threshold
-        score += 1
+        # === 2. Strong Displacement Candle ===
+        body_size = abs(last_candle['close'] - last_candle['open'])
+        candle_range = last_candle['high'] - last_candle['low']
+        if candle_range == 0:
+            return {'score': score, 'signal': None, 'sl': None, 'tp1': None, 'tp2': None}
+        if body_size / candle_range >= 0.6:
+            score += 1
 
-    return score
+        # === 3. VWAP Reclaim ===
+        vwap_val = VWAP.calculate(self.candles)
+        if last_candle['close'] > vwap_val:
+            score += 1
+            signal = 'BUY'
+        elif last_candle['close'] < vwap_val:
+            score += 1
+            signal = 'SELL'
+
+        # === 4. RSI Confirmation ===
+        rsi_val = RSI.calculate(self.candles)
+        if signal == 'BUY' and rsi_val > 50:
+            score += 1
+        elif signal == 'SELL' and rsi_val < 50:
+            score += 1
+        else:
+            signal = None  # cancel if RSI disagrees
+
+        # === 5. Volume Spike ===
+        if VolumeSpike.detect(self.candles):
+            score += 1
+
+        # === Entry only if score >=3 ===
+        if score < 3:
+            signal = None
+
+        # === Stop Loss & Take Profit ===
+        if signal == 'BUY':
+            sl = min(c['low'] for c in self.candles[-5:]) - 0.01
+            tp1 = last_candle['close'] + (last_candle['close'] - sl) * 1  # 1R
+            tp2 = last_candle['close'] + (last_candle['close'] - sl) * 2  # 2R
+        elif signal == 'SELL':
+            sl = max(c['high'] for c in self.candles[-5:]) + 0.01
+            tp1 = last_candle['close'] - (sl - last_candle['close']) * 1
+            tp2 = last_candle['close'] - (sl - last_candle['close']) * 2
+
+        return {'score': score, 'signal': signal, 'sl': sl, 'tp1': tp1, 'tp2': tp2}
