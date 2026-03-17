@@ -5,7 +5,7 @@ from config import DERIV_TOKENS
 class DerivWS:
     """
     Deriv WebSocket client for Gold/USD CFD (frxXAUUSD)
-    Streams 1-minute candles
+    Streams 1-minute candles (optimized logging for Railway)
     """
 
     def __init__(self, token_index=0):
@@ -16,26 +16,27 @@ class DerivWS:
     def on_message(self, ws, message):
         data = json.loads(message)
 
-        # Candle data
+        # Only print latest candle with essential info
         if "candles" in data:
-            print("Candle:", json.dumps(data["candles"], indent=2))
+            latest = data["candles"][-1]
+            print(f"Candle | O:{latest['open']} H:{latest['high']} L:{latest['low']} C:{latest['close']} Epoch:{latest['epoch']}")
 
-        # Errors
+        # Print errors
         if "error" in data:
             print("Deriv error:", data["error"])
 
     def on_open(self, ws):
         print("✅ Connected to Deriv WebSocket")
 
-        # 1) Authorize
+        # Authorize
         ws.send(json.dumps({"authorize": self.token}))
 
-        # 2) Subscribe to 1-minute candles
+        # Subscribe to 1-minute candles
         subscribe_msg = {
             "ticks_history": self.symbol,
             "end": "latest",
             "count": 100,
-            "granularity": 60,  # 1-minute candles
+            "granularity": 60,
             "style": "candles",
             "subscribe": 1
         }
