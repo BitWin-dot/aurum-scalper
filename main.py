@@ -1,65 +1,107 @@
 # main.py
-import time
-import asyncio
 
-from deriv_api import DerivWS  # WebSocket connection
+import time
+import threading
+from config import DERIV_API_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, SYMBOL, CANDLE_INTERVAL
+from deriv_api import DerivWS
 from trade_executor import TradeExecutor
 from trade_manager import TradeManager
 from risk_management import RiskManager
 from telegram_bot import send_telegram_message
-import strategies.confluence as confluence_module  # ✅ import full module instead of non-existent 'confluence'
+from logger import Logger
 
-# Your real tokens
-DERIV_API_TOKEN = "gIUrsIg5H56ZNfC"
-TELEGRAM_BOT_TOKEN = "8693765411:AAHql2ysRMOhvtgPuNf9JdyE6yfqfEowmjs"
-TELEGRAM_CHAT_ID = "-5180694120"
+# Import all strategies
+from strategies.confluence import Confluence
+from strategies.breakout import Breakout
+from strategies.liquidity_vwap import LiquidityVWAP
+from strategies.trend_pullback import TrendPullback
 
-# Bot configuration
-SYMBOL = "frxXAUUSD"  # Gold/USD on Deriv
-CANDLE_INTERVAL = "1m"
+# ------------------------
+# Initialize logger
+# ------------------------
+logger = Logger()
 
-# Initialize core components
+# ------------------------
+# Initialize Telegram
+# ------------------------
+def notify_startup():
+    try:
+        send_telegram_message(f"✅ Aurum Scalper Bot Started")
+    except Exception as e:
+        logger.error(f"Telegram notification failed: {e}")
+
+notify_startup()
+
+# ------------------------
+# Initialize WebSocket
+# ------------------------
 ws = DerivWS(DERIV_API_TOKEN)
-executor = TradeExecutor()
-manager = TradeManager()
-risk = RiskManager()
 
-# Send start notification
-send_telegram_message(
-    TELEGRAM_BOT_TOKEN,
-    TELEGRAM_CHAT_ID,
-    "✅ Aurum Scalper Bot Started"
-)
+def connect_ws():
+    connected = ws.connect()
+    if not connected:
+        logger.error("WebSocket connection failed")
+        raise RuntimeError("Could not connect to Deriv WebSocket")
+    logger.info("Connected to Deriv WebSocket")
 
-# Subscribe to live candles
-ws.subscribe_candles(symbol=SYMBOL, interval=CANDLE_INTERVAL)
-print(f"✅ Connected to Deriv WebSocket\nSubscribed to {SYMBOL} {CANDLE_INTERVAL} candles")
+connect_ws()
 
-# Main async bot loop
-async def bot_loop():
+# ------------------------
+# Subscribe to candles
+# ------------------------
+try:
+    ws.subscribe_candles(SYMBOL, CANDLE_INTERVAL)
+    logger.info(f"Subscribed to {SYMBOL} {CANDLE_INTERVAL} candles")
+except Exception as e:
+    logger.error(f"Failed to subscribe candles: {e}")
+    raise
+
+# ------------------------
+# Initialize Risk Manager, Trade Manager, Executor
+# ------------------------
+risk_manager = RiskManager()
+trade_executor = TradeExecutor(ws)
+trade_manager = TradeManager(trade_executor, risk_manager)
+
+# ------------------------
+# Initialize Strategies
+# ------------------------
+strategies = [
+    Confluence(),
+    Breakout(),
+    LiquidityVWAP(),
+    TrendPullback()
+]
+
+# ------------------------
+# Main Loop
+# ------------------------
+def main_loop():
+    logger.info("Starting main trading loop...")
     while True:
         try:
-            candles = ws.get_latest_candles(SYMBOL, CANDLE_INTERVAL)
-            if candles:
-                # Run your confluence strategy from the module
-                signals = confluence_module.run_confluence_strategy(candles)
+            candle = ws.get_latest_candle(SYMBOL)
+            if candle is None:
+                time.sleep(1)
+                continue
 
-                for signal in signals:
-                    # Risk checks before executing
-                    if risk.is_trade_allowed(signal):
-                        executor.execute_trade(signal)
-                        manager.record_trade(signal)
+            # Run each strategy on latest candle
+            for strategy in strategies:
+                signal = strategy.generate_signal(candle)
+                if signal:
+                    trade_manager.handle_signal(signal)
 
-            await asyncio.sleep(1)  # non-blocking delay
+            # Optional: small sleep to reduce CPU usage
+            time.sleep(0.5)
 
         except Exception as e:
-            print("Bot loop error:", e)
-            send_telegram_message(
-                TELEGRAM_BOT_TOKEN,
-                TELEGRAM_CHAT_ID,
-                f"⚠ Bot loop error: {e}"
-            )
-            await asyncio.sleep(5)  # wait before retrying
+            logger.error(f"Error in main loop: {e}")
+            try:
+                send_telegram_message(f"⚠️ Bot Error: {e}")
+            except Exception as tg_e:
+                logger.error(f"Failed to send Telegram error: {tg_e}")
+            time.sleep(5)
 
-# Run bot
-asyncio.run(bot_loop())
+# Run main loop in separate thread to allow async tasks
+thread = threading.Thread(target=main_loop)
+thread.start()
