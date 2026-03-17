@@ -1,5 +1,6 @@
-# main.py (Fast Test Mode for Railway)
-import time
+# main.py - Aurum Scalper Production (Live Deriv Candles)
+import json
+from deriv_api import DerivWS
 from strategies.liquidity_vwap import calculate_score
 import requests
 
@@ -15,7 +16,7 @@ def send_telegram(message):
     except Exception as e:
         print("Telegram send error:", e)
 
-# Placeholder VWAP & RSI
+# Placeholder indicators (replace with real VWAP & RSI later)
 def compute_vwap(candle):
     return (candle["high"] + candle["low"] + candle["close"]) / 3
 
@@ -23,29 +24,33 @@ def compute_rsi(candle):
     return 55  # placeholder
 
 def handle_new_candle(candle):
-    vwap = compute_vwap(candle)
-    rsi = compute_rsi(candle)
-    score = calculate_score(candle, vwap, rsi)
+    """
+    Process new live Deriv candle and check Liquidity Sweep + VWAP strategy
+    """
+    candle_data = {
+        "open": candle["open"],
+        "high": candle["high"],
+        "low": candle["low"],
+        "close": candle["close"],
+        "volume": candle.get("volume", 0),
+        "prev_high": candle.get("prev_high", candle["high"] - 5),
+        "prev_low": candle.get("prev_low", candle["low"] + 5)
+    }
+
+    vwap = compute_vwap(candle_data)
+    rsi = compute_rsi(candle_data)
+    score = calculate_score(candle_data, vwap, rsi)
+
     if score >= 3:
         msg = f"🚀 Trade Signal! Score: {score} | Close:{candle['close']} High:{candle['high']} Low:{candle['low']}"
         print(msg)
-        send_telegram(f"Aurum Scalper Test Message: {msg}")
+        send_telegram(f"Aurum Scalper Live: {msg}")
+
+def start_bot():
+    ws_client = DerivWS()
+    ws_client.candle_handler = handle_new_candle
+    print("🚀 Aurum Scalper Bot Starting with Live Deriv Candles...")
+    ws_client.start()
 
 if __name__ == "__main__":
-    print("🚀 Aurum Scalper Bot Fast-Test Mode Starting...")
-
-    # Simulate 5 candles instantly
-    for i in range(5):
-        fake_candle = {
-            "open": 5000,
-            "high": 5010,
-            "low": 4995,
-            "close": 5005,
-            "volume": 1500,
-            "prev_high": 5008,
-            "prev_low": 4998
-        }
-        handle_new_candle(fake_candle)
-        time.sleep(1)  # 1 second between simulated candles
-
-    print("✅ Fast Test Complete")
+    start_bot()
