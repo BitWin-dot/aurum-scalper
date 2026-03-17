@@ -1,22 +1,19 @@
 # main.py
 import json
-import threading
 from deriv_api import DerivWS
 from strategies.liquidity_vwap import calculate_score
 
-# Placeholder indicators
+# Placeholder indicators (will implement proper VWAP & RSI later)
 def compute_vwap(candle):
-    # Replace with real VWAP calculation later
     return (candle["high"] + candle["low"] + candle["close"]) / 3
 
 def compute_rsi(candle):
-    # Replace with real RSI calculation later
     return 55  # placeholder
 
 # Handle each new candle
 def handle_new_candle(candle):
     """
-    Process a new candle and check Liquidity Sweep + VWAP strategy
+    Process new candle and check Liquidity Sweep + VWAP strategy
     """
     candle_data = {
         "open": candle["open"],
@@ -36,7 +33,7 @@ def handle_new_candle(candle):
     if score >= 3:
         print(f"🚀 Trade Signal Detected! Score: {score} | Close:{candle['close']} High:{candle['high']} Low:{candle['low']}")
 
-# Start Deriv WebSocket in a separate thread
+# Start Deriv WebSocket
 def start_bot():
     ws_client = DerivWS()
 
@@ -50,11 +47,17 @@ def start_bot():
             handle_new_candle(latest)  # send to strategy
         if "error" in data:
             print("Deriv error:", data["error"])
+
     ws_client.on_message = new_on_message
 
-    ws_client.start()
+    # Run WebSocket with automatic reconnect
+    while True:
+        try:
+            ws_client.start()
+        except Exception as e:
+            print("WebSocket crashed, reconnecting...", e)
 
 # Run bot
 if __name__ == "__main__":
     print("🚀 Aurum Scalper Bot Starting...")
-    threading.Thread(target=start_bot).start()
+    start_bot()
