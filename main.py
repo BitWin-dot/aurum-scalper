@@ -1,6 +1,7 @@
-# main.py - Aurum Scalper Real Trading with Partial TP & Dynamic Lot
+# main.py - Aurum Scalper Full Production-Grade
 import time
 import requests
+from datetime import datetime, timezone
 from deriv_api import DerivWS
 from strategies.liquidity_vwap import calculate_score
 
@@ -23,16 +24,22 @@ TP_MULTIPLIER_2 = 2.0
 MAX_CONSECUTIVE_LOSSES = 3
 DAILY_DRAWDOWN_LIMIT = 5.0
 MAX_TRADES_PER_SESSION = 10
+MAX_SPREAD = 2.0  # Max spread in points/pips
+MIN_ATR = 5.0     # Minimum ATR to trade
+TRADES_PER_HOUR_LIMIT = 3
 
 # --- Globals ---
 open_trades = []
 consecutive_losses = 0
 daily_drawdown = 0
 session_trade_count = 0
+hourly_trade_count = {}
+last_hour = datetime.now().hour
 
-# --- Candle tracking for VWAP/RSI ---
+# --- Candle tracking for VWAP/RSI/ATR ---
 VWAP_PERIOD = 20
 RSI_PERIOD = 14
+ATR_PERIOD = 14
 candle_window = []
 close_prices = []
 
@@ -62,7 +69,19 @@ def compute_rsi(prices, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-# --- Trade execution ---
+def compute_atr(candles, period=14):
+    if len(candles) < period + 1:
+        return 0
+    trs = []
+    for i in range(-period, 0):
+        high = candles[i]["high"]
+        low = candles[i]["low"]
+        prev_close = candles[i-1]["close"]
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        trs.append(tr)
+    return sum(trs)/len(trs) if trs else 0
+
+# --- Lot sizing ---
 def calculate_lot_size(account_balance, entry, stop_loss):
     risk_amount = account_balance * (RISK_PERCENT / 100)
     distance = abs(entry - stop_loss)
@@ -71,7 +90,20 @@ def calculate_lot_size(account_balance, entry, stop_loss):
     lot_size = round(risk_amount / distance, 2)
     return max(0.01, lot_size)
 
-def execute_trade(direction, entry_price, sl, tp1, tp2, lot_size, account_balance):
+# --- Trade Execution ---
+def execute_trade(direction, entry_price, sl, tp1, tp2, lot_size):
+    global session_trade_count, hourly_trade_count, last_hour
+
+    now_hour = datetime.now().hour
+    if now_hour != last_hour:
+        hourly_trade_count[now_hour] = 0
+        last_hour = now_hour
+    hourly_trade_count[now_hour] = hourly_trade_count.get(now_hour,0) + 1
+
+    if hourly_trade_count[now_hour] > TRADES_PER_HOUR_LIMIT:
+        print("Hourly trade limit reached, skipping trade.")
+        return
+
     trade = {
         "direction": direction,
         "entry": entry_price,
@@ -82,6 +114,8 @@ def execute_trade(direction, entry_price, sl, tp1, tp2, lot_size, account_balanc
         "status": "open"
     }
     open_trades.append(trade)
+    session_trade_count += 1
+
     msg = (
         f"TRADE OPENED\nDirection: {direction}\nEntry: {entry_price}\n"
         f"SL: {sl}\nTP1: {tp1}\nTP2: {tp2}\nLot: {lot_size}\nRisk: {RISK_PERCENT}%"
@@ -89,71 +123,68 @@ def execute_trade(direction, entry_price, sl, tp1, tp2, lot_size, account_balanc
     print(msg)
     send_telegram(f"Aurum Scalper Live: {msg}")
 
-# --- Manage trades ---
+# --- Manage Open Trades ---
 def check_open_trades(current_price):
-    global open_trades, consecutive_losses, daily_drawdown
+    global open_trades
     for trade in open_trades[:]:
-        # TP1
         if trade["status"] == "open":
             if (trade["direction"] == "BUY" and current_price >= trade["tp1"]) or \
                (trade["direction"] == "SELL" and current_price <= trade["tp1"]):
                 trade["status"] = "tp1_done"
-                msg = f"Partial TP hit (50%) at {trade['tp1']}"
-                print(msg)
-                send_telegram(msg)
-        # TP2
+                send_telegram(f"Partial TP hit (50%) at {trade['tp1']}")
         if trade["status"] == "tp1_done":
             if (trade["direction"] == "BUY" and current_price >= trade["tp2"]) or \
                (trade["direction"] == "SELL" and current_price <= trade["tp2"]):
                 trade["status"] = "closed"
-                msg = f"Final TP hit at {trade['tp2']} - Trade Closed"
-                print(msg)
-                send_telegram(msg)
+                send_telegram(f"Final TP hit at {trade['tp2']} - Trade Closed")
                 open_trades.remove(trade)
 
-# --- Handle new candle ---
-def handle_new_candle(candle, account_balance=10000):
-    global candle_window, close_prices, session_trade_count
+# --- Session Filter ---
+def is_london_ny_session():
+    utc_hour = datetime.utcnow().hour
+    return (7 <= utc_hour <= 16)  # London+NY overlap approx
 
-    candle_data = {
-        "open": candle["open"],
-        "high": candle["high"],
-        "low": candle["low"],
-        "close": candle["close"],
-        "volume": candle.get("volume", 0),
-        "prev_high": candle.get("prev_high", candle["high"] - 5),
-        "prev_low": candle.get("prev_low", candle["low"] + 5)
-    }
+# --- Candle Handler ---
+def handle_new_candle(candle, account_balance=10000, spread=1.0):
+    global candle_window, close_prices, session_trade_count, daily_drawdown
 
+    # --- Update Candles & Indicators ---
+    candle_data = {"open":candle["open"],"high":candle["high"],"low":candle["low"],"close":candle["close"],"volume":candle.get("volume",0)}
     candle_window.append(candle_data)
     if len(candle_window) > VWAP_PERIOD:
         candle_window.pop(0)
-
     close_prices.append(candle_data["close"])
-    if len(close_prices) > RSI_PERIOD + 1:
+    if len(close_prices) > RSI_PERIOD+1:
         close_prices.pop(0)
 
     vwap = compute_vwap(candle_window)
     rsi = compute_rsi(close_prices, RSI_PERIOD)
+    atr = compute_atr(candle_window, ATR_PERIOD)
     score = calculate_score(candle_data, vwap, rsi)
 
+    # --- Safety & Filters ---
+    if not is_london_ny_session():
+        return
+    if spread > MAX_SPREAD or atr < MIN_ATR:
+        return
+    if daily_drawdown >= DAILY_DRAWDOWN_LIMIT:
+        return
     check_open_trades(candle_data["close"])
 
+    # --- Execute Trade if Score >= 3 ---
     if score >= 3 and session_trade_count < MAX_TRADES_PER_SESSION:
         direction = "BUY" if candle_data["close"] > vwap else "SELL"
-        stop_loss = candle_data["low"] - 10 if direction == "BUY" else candle_data["high"] + 10
-        tp1 = candle_data["close"] + TP_MULTIPLIER_1 * abs(candle_data["close"] - stop_loss) if direction == "BUY" else candle_data["close"] - TP_MULTIPLIER_1 * abs(candle_data["close"] - stop_loss)
-        tp2 = candle_data["close"] + TP_MULTIPLIER_2 * abs(candle_data["close"] - stop_loss) if direction == "BUY" else candle_data["close"] - TP_MULTIPLIER_2 * abs(candle_data["close"] - stop_loss)
+        stop_loss = candle_data["low"] - 10 if direction=="BUY" else candle_data["high"] + 10
+        tp1 = candle_data["close"] + TP_MULTIPLIER_1 * abs(candle_data["close"] - stop_loss) if direction=="BUY" else candle_data["close"] - TP_MULTIPLIER_1 * abs(candle_data["close"] - stop_loss)
+        tp2 = candle_data["close"] + TP_MULTIPLIER_2 * abs(candle_data["close"] - stop_loss) if direction=="BUY" else candle_data["close"] - TP_MULTIPLIER_2 * abs(candle_data["close"] - stop_loss)
         lot_size = calculate_lot_size(account_balance, candle_data["close"], stop_loss)
-
-        execute_trade(direction, candle_data["close"], stop_loss, tp1, tp2, lot_size, account_balance)
-        session_trade_count += 1
+        execute_trade(direction, candle_data["close"], stop_loss, tp1, tp2, lot_size)
 
 # --- Start Bot ---
 def start_bot():
     ws_client = DerivWS()
     ws_client.candle_handler = handle_new_candle
-    print("🚀 Aurum Scalper Real Trading Bot with Partial TP Starting...")
+    print("🚀 Aurum Scalper Full Production-Grade Starting...")
     ws_client.start()
 
 if __name__ == "__main__":
