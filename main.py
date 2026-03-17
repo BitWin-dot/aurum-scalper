@@ -4,7 +4,6 @@ import time
 import traceback
 
 from deriv_api import DerivWS
-from strategies.confluence import Confluence
 from filters.session import SessionFilter
 from filters.volatility import VolatilityFilter
 from filters.spread import SpreadFilter
@@ -12,12 +11,13 @@ from risk_management import RiskManager
 from trade_executor import TradeExecutor
 from trade_manager import TradeManager
 from telegram_bot import send_telegram_message
+from strategies.confluence import confluence  # ✅ corrected: lowercase
 
 
 # ================= CONFIG =================
 SYMBOL = "frxXAUUSD"
-TIMEFRAME = 60  # 1 minute candles
-BALANCE = 1000  # change if needed
+TIMEFRAME = 60  # 1-minute candles
+BALANCE = 1000  # adjust if needed
 # ==========================================
 
 
@@ -26,7 +26,7 @@ def run_bot():
     print("🚀 Aurum Scalper Final Bot Started")
     send_telegram_message("🚀 Aurum Scalper Bot is LIVE")
 
-    ws = DerivWS()  # your fixed version (no token issues)
+    ws = DerivWS()  # fixed DerivWS initialization (env token inside deriv_api.py)
 
     ws.connect()
     ws.subscribe_candles(SYMBOL, TIMEFRAME)
@@ -64,7 +64,7 @@ def run_bot():
             # ===========================================
 
             # ================= STRATEGY =================
-            signal = Confluence.generate_signal(candles)
+            signal = confluence.generate_signal(candles)
 
             if signal not in ["BUY", "SELL"]:
                 continue
