@@ -1,59 +1,59 @@
-import json
 import websocket
-from config import DERIV_TOKENS
+import json
+import threading
+import time
 
 class DerivWS:
-    def __init__(self, token_index=0):
-        self.token = DERIV_TOKENS[token_index]
+    def __init__(self, token):
+        """
+        Initialize WebSocket with your real Deriv API token.
+        """
+        self.token = token
         self.ws = None
-        self.symbol = "frxXAUUSD"
         self.candle_handler = None
-        self.first_candle_received = False
+        self.symbol = "frxXAUUSD"
+        self.interval = "1m"
 
-    def on_message(self, ws, message):
-        data = json.loads(message)
-        if "candles" in data:
-            latest = data["candles"][-1]
-
-            # Ignore initial backlog candle
-            if not self.first_candle_received:
-                self.first_candle_received = True
-                return
-
-            if self.candle_handler:
-                self.candle_handler(latest)
-
-        if "error" in data:
-            print("Deriv error:", data["error"])
+    def start(self):
+        """Start the WebSocket connection"""
+        url = f"wss://ws.binaryws.com/websockets/v3?app_id=1089&l=EN"
+        self.ws = websocket.WebSocketApp(
+            url,
+            on_open=self.on_open,
+            on_message=self.on_message,
+            on_close=self.on_close,
+            on_error=self.on_error
+        )
+        thread = threading.Thread(target=self.ws.run_forever)
+        thread.daemon = True
+        thread.start()
 
     def on_open(self, ws):
         print("✅ Connected to Deriv WebSocket")
-        ws.send(json.dumps({"authorize": self.token}))
-
+        # Subscribe to candles
         subscribe_msg = {
             "ticks_history": self.symbol,
-            "end": "latest",
-            "count": 2,  # minimal backlog
+            "subscribe": 1,
+            "adjust_start_time": 1,
+            "count": 1,
             "granularity": 60,
-            "style": "candles",
-            "subscribe": 1
+            "style": "candles"
         }
-        ws.send(json.dumps(subscribe_msg))
-        print(f"Subscribed to {self.symbol} 1-minute candles")
+        self.ws.send(json.dumps(subscribe_msg))
+        print(f"Subscribed to {self.symbol} {self.interval} candles")
 
-    def on_error(self, ws, error):
-        print("WebSocket error:", error)
+    def on_message(self, ws, message):
+        data = json.loads(message)
+        try:
+            if "candles" in data:
+                candle = data["candles"][-1]
+                if self.candle_handler:
+                    self.candle_handler(candle)
+        except Exception as e:
+            print("Error handling candle:", e)
 
     def on_close(self, ws, close_status_code, close_msg):
         print("WebSocket closed")
 
-    def start(self):
-        self.ws = websocket.WebSocketApp(
-            "wss://ws.binaryws.com/websockets/v3?app_id=1089",
-            on_open=self.on_open,
-            on_message=self.on_message,
-            on_error=self.on_error,
-            on_close=self.on_close
-        )
-        # run_forever handles reconnects internally
-        self.ws.run_forever()
+    def on_error(self, ws, error):
+        print("WebSocket error:", error)
