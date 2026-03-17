@@ -1,80 +1,65 @@
 # main.py
-
 import time
-from deriv_api import DerivWS
+import asyncio
+
+from deriv_api import DerivWS  # WebSocket connection
 from trade_executor import TradeExecutor
 from trade_manager import TradeManager
+from risk_management import RiskManager
 from telegram_bot import send_telegram_message
-from strategies.confluence import confluence  # ✅ matches your structure
+import strategies.confluence as confluence_module  # ✅ import full module instead of non-existent 'confluence'
 
-# -------------------------------
-# CONFIG
-# -------------------------------
+# Your real tokens
 DERIV_API_TOKEN = "gIUrsIg5H56ZNfC"
-SYMBOL = "frxXAUUSD"
-LOT_SIZE = 1.0
-SL = 10  # example stop loss
-TP1 = 20  # example take profit 1
-TP2 = 40  # example take profit 2
+TELEGRAM_BOT_TOKEN = "8693765411:AAHql2ysRMOhvtgPuNf9JdyE6yfqfEowmjs"
+TELEGRAM_CHAT_ID = "-5180694120"
+
+# Bot configuration
+SYMBOL = "frxXAUUSD"  # Gold/USD on Deriv
 CANDLE_INTERVAL = "1m"
 
-# -------------------------------
-# INITIALIZE WEBSOCKET
-# -------------------------------
-try:
-    ws = DerivWS(DERIV_API_TOKEN)
-    print("✅ Connected to Deriv WebSocket")
-except Exception as e:
-    print("❌ WebSocket connection failed:", e)
-    send_telegram_message(f"❌ WebSocket connection failed: {e}")
-    exit(1)
+# Initialize core components
+ws = DerivWS(DERIV_API_TOKEN)
+executor = TradeExecutor()
+manager = TradeManager()
+risk = RiskManager()
 
-# -------------------------------
-# SUBSCRIBE TO LIVE CANDLES
-# -------------------------------
-try:
-    ws.subscribe_candles(symbol=SYMBOL, interval=CANDLE_INTERVAL)
-    print(f"Subscribed to {SYMBOL} {CANDLE_INTERVAL} candles")
-except Exception as e:
-    print("❌ Candle subscription failed:", e)
-    send_telegram_message(f"❌ Candle subscription failed: {e}")
-    exit(1)
+# Send start notification
+send_telegram_message(
+    TELEGRAM_BOT_TOKEN,
+    TELEGRAM_CHAT_ID,
+    "✅ Aurum Scalper Bot Started"
+)
 
-# -------------------------------
-# INITIALIZE TRADE MANAGER
-# -------------------------------
-trade_manager = TradeManager(ws, TradeExecutor)
+# Subscribe to live candles
+ws.subscribe_candles(symbol=SYMBOL, interval=CANDLE_INTERVAL)
+print(f"✅ Connected to Deriv WebSocket\nSubscribed to {SYMBOL} {CANDLE_INTERVAL} candles")
 
-# -------------------------------
-# BOT LOOP
-# -------------------------------
-print("🚀 Aurum Scalper Bot Started")
-send_telegram_message("🚀 Aurum Scalper Bot Started")
+# Main async bot loop
+async def bot_loop():
+    while True:
+        try:
+            candles = ws.get_latest_candles(SYMBOL, CANDLE_INTERVAL)
+            if candles:
+                # Run your confluence strategy from the module
+                signals = confluence_module.run_confluence_strategy(candles)
 
-while True:
-    try:
-        # Get the latest candles
-        candles = ws.get_latest_candles(SYMBOL, interval=CANDLE_INTERVAL, count=10)
-        if not candles:
-            time.sleep(1)
-            continue
+                for signal in signals:
+                    # Risk checks before executing
+                    if risk.is_trade_allowed(signal):
+                        executor.execute_trade(signal)
+                        manager.record_trade(signal)
 
-        # Generate signal from confluence strategy
-        signal = confluence.generate_signal(candles)
-        if signal:
-            print(f"Signal detected: {signal}")
-            trade_manager.manage_trade(
-                symbol=SYMBOL,
-                signal=signal,
-                lot=LOT_SIZE,
-                sl=SL,
-                tp1=TP1,
-                tp2=TP2
+            await asyncio.sleep(1)  # non-blocking delay
+
+        except Exception as e:
+            print("Bot loop error:", e)
+            send_telegram_message(
+                TELEGRAM_BOT_TOKEN,
+                TELEGRAM_CHAT_ID,
+                f"⚠ Bot loop error: {e}"
             )
+            await asyncio.sleep(5)  # wait before retrying
 
-        time.sleep(1)  # 1 second loop for minimal latency
-
-    except Exception as e:
-        print("⚠️ Bot loop error:", e)
-        send_telegram_message(f"⚠️ Bot loop error: {e}")
-        time.sleep(5)
+# Run bot
+asyncio.run(bot_loop())
