@@ -4,57 +4,44 @@ from config import DERIV_TOKENS
 
 class DerivWS:
     """
-    Deriv WebSocket client
-    Automatically finds Gold/USD CFD and subscribes to 1-minute candles
+    Deriv WebSocket client for Gold/USD CFD
+    Streams 1-minute candles
     """
 
     def __init__(self, token_index=0):
         self.token = DERIV_TOKENS[token_index]
         self.ws = None
-        self.gold_symbol = None
+        self.symbol = "Gold/USD"  # Correct Deriv symbol for Gold/USD CFD
 
     def on_message(self, ws, message):
         data = json.loads(message)
-
-        # Look for active symbols response
-        if data.get("msg_type") == "active_symbols":
-            for item in data["active_symbols"]:
-                # We only want CFD/forex products
-                if item.get("market") == "forex" or item.get("market") == "commodities":
-                    sym = item.get("symbol")
-                    if sym and "GOLD" in sym.upper():
-                        self.gold_symbol = sym
-                        print(f"✅ Found Gold symbol: {sym}")
-                        self.subscribe_candles(sym)
-                        break
 
         # Candle data
         if "candles" in data:
             print("Candle:", json.dumps(data["candles"], indent=2))
 
+        # Error handling
         if "error" in data:
             print("Deriv error:", data["error"])
 
     def on_open(self, ws):
-        print("Connected to Deriv WebSocket")
+        print("✅ Connected to Deriv WebSocket")
 
         # 1) Authorize
-        ws.send(json.dumps({"authorize": self.token}))
+        auth_msg = {"authorize": self.token}
+        ws.send(json.dumps(auth_msg))
 
-        # 2) Request active symbols filtered by market type
-        ws.send(json.dumps({"active_symbols": "brief"}))  # WebSocket API will return all symbols, we filter in code
-
-    def subscribe_candles(self, symbol):
+        # 2) Subscribe to Gold/USD 1-minute candles
         subscribe_msg = {
-            "ticks_history": symbol,
+            "ticks_history": self.symbol,
             "end": "latest",
             "count": 100,
-            "granularity": 60,
+            "granularity": 60,  # 1-minute candles
             "style": "candles",
             "subscribe": 1
         }
-        self.ws.send(json.dumps(subscribe_msg))
-        print(f"Subscribed to {symbol} 1-minute candles")
+        ws.send(json.dumps(subscribe_msg))
+        print(f"Subscribed to {self.symbol} 1-minute candles")
 
     def on_error(self, ws, error):
         print("WebSocket error:", error)
