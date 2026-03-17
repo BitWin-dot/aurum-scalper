@@ -4,41 +4,47 @@ from config import DERIV_TOKENS
 
 class DerivWS:
     """
-    Minimal Deriv WebSocket client for XAU/USD
+    Deriv WebSocket client for XAU/USD 1-minute candles
     """
+
     def __init__(self, token_index=0):
         self.token = DERIV_TOKENS[token_index]
         self.ws = None
-        self.subscribed = False
 
     def on_message(self, ws, message):
         data = json.loads(message)
-        # For testing, print the candle data
-        if "candles" in data:
-            candle = data["candles"]
-            print(f"Received candle: {candle}")
+        # Check for tick/candle data
+        if "history" in data or "candles" in data:
+            # Example structure for printing
+            print("Candle data received:", json.dumps(data, indent=2))
+        elif "error" in data:
+            print("Deriv error:", data["error"])
 
     def on_open(self, ws):
-        print("Connected to Deriv WebSocket")
-        # Subscribe to 1-minute XAU/USD candles
+        print("✅ Connected to Deriv WebSocket")
+
+        # Step 1 — Authorize
+        auth_msg = {
+            "authorize": self.token
+        }
+        ws.send(json.dumps(auth_msg))
+
+        # Step 2 — Subscribe to XAU/USD 1-minute candles
         subscribe_msg = {
             "ticks_history": "XAUUSD",
-            "adjust_start_time": 1,
-            "count": 1,
             "end": "latest",
-            "start": 1,
+            "count": 100,       # last 100 candles
+            "granularity": 60,  # 1-minute candles
             "style": "candles",
             "subscribe": 1
         }
-        ws.send(json.dumps({
-            "authorize": self.token
-        }))
         ws.send(json.dumps(subscribe_msg))
+        print("Subscribed to XAU/USD 1-minute candles")
 
     def on_error(self, ws, error):
         print(f"WebSocket error: {error}")
 
-    def on_close(self, ws):
+    def on_close(self, ws, close_status_code, close_msg):
         print("WebSocket closed")
 
     def start(self):
