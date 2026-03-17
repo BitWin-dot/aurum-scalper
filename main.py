@@ -1,5 +1,3 @@
-# main.py - Aurum Scalper Minimal Stable Version
-
 import time
 from deriv_api import DerivWS
 import requests
@@ -20,7 +18,6 @@ def send_telegram_message(msg):
     except Exception as e:
         print("Telegram error:", e)
 
-# Test Telegram
 send_telegram_message("✅ Aurum Scalper Minimal Bot Running")
 
 # Candle handler
@@ -30,8 +27,9 @@ def handle_candle(candle):
     except Exception as e:
         print("Candle handler error:", e)
 
-# Start Deriv WebSocket
-ws = DerivWS(api_token=DERIV_API_TOKEN)
+# -------------------------------
+# Correct DerivWS initialization
+ws = DerivWS(DERIV_API_TOKEN)  # pass token directly
 ws.candle_handler = handle_candle
 ws.start()
 print("🚀 Aurum Scalper Minimal Bot Started")
